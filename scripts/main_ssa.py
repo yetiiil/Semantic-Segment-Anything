@@ -33,7 +33,7 @@ def main(rank, args):
 
     mask_branch_model = SamAutomaticMaskGenerator(
         model=sam,
-        points_per_side=128 if args.dataset == 'foggy_driving' else 64,
+        points_per_side=64,
         # Foggy driving (zero-shot evaluate) is more challenging than other dataset, so we use a larger points_per_side
         pred_iou_thresh=0.86,
         stability_score_thresh=0.92,
@@ -44,48 +44,13 @@ def main(rank, args):
     )
     print('[Model loaded] Mask branch (SAM) is loaded.')
     # yoo can add your own semantic branch here, and modify the following code
-    if args.model == 'oneformer':
-        from transformers import OneFormerProcessor, OneFormerForUniversalSegmentation
-        if args.dataset == 'ade20k':
-            semantic_branch_processor = OneFormerProcessor.from_pretrained(
-                "shi-labs/oneformer_ade20k_swin_large")
-            semantic_branch_model = OneFormerForUniversalSegmentation.from_pretrained(
-                "shi-labs/oneformer_ade20k_swin_large").to(rank)
-        elif args.dataset == 'cityscapes':
-            semantic_branch_processor = OneFormerProcessor.from_pretrained(
-                "shi-labs/oneformer_cityscapes_swin_large")
-            semantic_branch_model = OneFormerForUniversalSegmentation.from_pretrained(
-                "shi-labs/oneformer_cityscapes_swin_large").to(rank)
-        elif args.dataset == 'foggy_driving':
-            semantic_branch_processor = OneFormerProcessor.from_pretrained("shi-labs/oneformer_cityscapes_dinat_large")
-            semantic_branch_model = OneFormerForUniversalSegmentation.from_pretrained(
-                "shi-labs/oneformer_cityscapes_dinat_large").to(rank)
-        else:
-            raise NotImplementedError()
-    elif args.model == 'segformer':
-        from transformers import SegformerFeatureExtractor, SegformerForSemanticSegmentation
-        if args.dataset == 'ade20k':
-            semantic_branch_processor = SegformerFeatureExtractor.from_pretrained(
-                "nvidia/segformer-b5-finetuned-ade-640-640")
-            semantic_branch_model = SegformerForSemanticSegmentation.from_pretrained(
-                "nvidia/segformer-b5-finetuned-ade-640-640").to(rank)
-        elif args.dataset == 'cityscapes' or args.dataset == 'foggy_driving':
-            semantic_branch_processor = SegformerFeatureExtractor.from_pretrained(
-                "nvidia/segformer-b5-finetuned-cityscapes-1024-1024")
-            semantic_branch_model = SegformerForSemanticSegmentation.from_pretrained(
-                "nvidia/segformer-b5-finetuned-cityscapes-1024-1024").to(rank)
-        else:
-            raise NotImplementedError()
-    else:
-        raise NotImplementedError()
+    from transformers import OneFormerProcessor, OneFormerForUniversalSegmentation
+    semantic_branch_processor = OneFormerProcessor.from_pretrained(
+        "shi-labs/oneformer_ade20k_swin_large", cache_dir="/scratch2/yuxili/pdm/huggingface/")
+    semantic_branch_model = OneFormerForUniversalSegmentation.from_pretrained(
+        "shi-labs/oneformer_ade20k_swin_large", cache_dir="/scratch2/yuxili/pdm/huggingface/").to(rank)
     print('[Model loaded] Semantic branch (your own segmentor) is loaded.')
-    if args.dataset == 'ade20k':
-        filenames = [fn_.replace('.jpg', '') for fn_ in os.listdir(args.data_dir) if '.jpg' in fn_]
-    elif args.dataset == 'cityscapes' or args.dataset == 'foggy_driving':
-        sub_folders = [fn_ for fn_ in os.listdir(args.data_dir) if os.path.isdir(os.path.join(args.data_dir, fn_))]
-        filenames = []
-        for sub_folder in sub_folders:
-            filenames += [os.path.join(sub_folder, fn_.replace('.png', '')) for fn_ in os.listdir(args.data_dir + sub_folder) if '.png' in fn_]
+    filenames = [fn_.replace('.jpg', '') for fn_ in os.listdir(args.data_dir) if '.jpg' in fn_]
     local_filenames = filenames[(len(filenames) // args.world_size + 1) * rank : (len(filenames) // args.world_size + 1) * (rank + 1)]
     print('[Image name loaded] get image filename list.')
     print('[SSA start] model inference starts.')
@@ -93,12 +58,7 @@ def main(rank, args):
     for i, file_name in enumerate(local_filenames):
         print('[Runing] ', i, '/', len(local_filenames), ' ', file_name, ' on rank ', rank, '/', args.world_size)
         img = img_load(args.data_dir, file_name, args.dataset)
-        if args.dataset == 'ade20k':
-            id2label = CONFIG_ADE20K_ID2LABEL
-        elif args.dataset == 'cityscapes' or args.dataset == 'foggy_driving':
-            id2label = CONFIG_CITYSCAPES_ID2LABEL
-        else:
-            raise NotImplementedError()
+        id2label = CONFIG_ADE20K_ID2LABEL
         with torch.no_grad():
             semantic_segment_anything_inference(file_name, args.out_dir, rank, img=img, save_img=args.save_img,
                                    semantic_branch_processor=semantic_branch_processor,
